@@ -1,0 +1,174 @@
+{
+  "info": {
+    "name": "Order Processing Saga",
+    "description": "Exercises success, payment-failure compensation, and inventory-rejection flows. Run with Collection Runner and a 500 ms request delay; status requests repeat until the expected terminal state or timeout.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Create successful order",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customerEmail\": \"buyer@example.com\",\n  \"totalAmount\": 49.95\n}"
+        },
+        "url": "{{baseUrl}}/orders"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "pm.test('Order accepted', function () { pm.response.to.have.status(202); });",
+            "const order = pm.response.json();",
+            "pm.collectionVariables.set('successOrderId', order.id);",
+            "pm.collectionVariables.set('successPollCount', '0');"
+          ]
+        }
+      }]
+    },
+    {
+      "name": "2. Wait for successful order",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/orders/{{successOrderId}}"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "const order = pm.response.json();",
+            "const attempts = Number(pm.collectionVariables.get('successPollCount') || '0');",
+            "if (order.status === 'Confirmed') {",
+            "  pm.test('Successful order is Confirmed', function () { pm.expect(order.status).to.eql('Confirmed'); });",
+            "  pm.execution.setNextRequest('3. Create payment failure order');",
+            "} else if (attempts < 20) {",
+            "  pm.collectionVariables.set('successPollCount', String(attempts + 1));",
+            "  pm.execution.setNextRequest('2. Wait for successful order');",
+            "} else {",
+            "  pm.test('Successful order reached Confirmed before timeout', function () { pm.expect(order.status).to.eql('Confirmed'); });",
+            "  pm.execution.setNextRequest('3. Create payment failure order');",
+            "}"
+          ]
+        }
+      }]
+    },
+    {
+      "name": "3. Create payment failure order",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customerEmail\": \"buyer@example.com\",\n  \"totalAmount\": 49.95,\n  \"simulatePaymentFailure\": true\n}"
+        },
+        "url": "{{baseUrl}}/orders"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "pm.test('Order accepted', function () { pm.response.to.have.status(202); });",
+            "const order = pm.response.json();",
+            "pm.collectionVariables.set('paymentFailureOrderId', order.id);",
+            "pm.collectionVariables.set('paymentFailurePollCount', '0');"
+          ]
+        }
+      }]
+    },
+    {
+      "name": "4. Wait for payment compensation",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/orders/{{paymentFailureOrderId}}"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "const order = pm.response.json();",
+            "const attempts = Number(pm.collectionVariables.get('paymentFailurePollCount') || '0');",
+            "if (order.status === 'Cancelled') {",
+            "  pm.test('Payment failure was compensated and order cancelled', function () { pm.expect(order.status).to.eql('Cancelled'); pm.expect(order.failureReason).to.include('declined'); });",
+            "  pm.execution.setNextRequest('5. Create inventory rejection order');",
+            "} else if (attempts < 20) {",
+            "  pm.collectionVariables.set('paymentFailurePollCount', String(attempts + 1));",
+            "  pm.execution.setNextRequest('4. Wait for payment compensation');",
+            "} else {",
+            "  pm.test('Payment failure reached Cancelled before timeout', function () { pm.expect(order.status).to.eql('Cancelled'); });",
+            "  pm.execution.setNextRequest('5. Create inventory rejection order');",
+            "}"
+          ]
+        }
+      }]
+    },
+    {
+      "name": "5. Create inventory rejection order",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customerEmail\": \"buyer@example.com\",\n  \"totalAmount\": 49.95,\n  \"simulateInventoryFailure\": true\n}"
+        },
+        "url": "{{baseUrl}}/orders"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "pm.test('Order accepted', function () { pm.response.to.have.status(202); });",
+            "const order = pm.response.json();",
+            "pm.collectionVariables.set('inventoryFailureOrderId', order.id);",
+            "pm.collectionVariables.set('inventoryFailurePollCount', '0');"
+          ]
+        }
+      }]
+    },
+    {
+      "name": "6. Wait for inventory rejection",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/orders/{{inventoryFailureOrderId}}"
+      },
+      "event": [{
+        "listen": "test",
+        "script": {
+          "type": "text/javascript",
+          "exec": [
+            "const order = pm.response.json();",
+            "const attempts = Number(pm.collectionVariables.get('inventoryFailurePollCount') || '0');",
+            "if (order.status === 'Cancelled' && order.failureReason && order.failureReason.includes('Unknown SKU')) {",
+            "  pm.test('Inventory rejection cancels the order', function () { pm.expect(order.status).to.eql('Cancelled'); pm.expect(order.failureReason).to.include('Unknown SKU'); });",
+            "  pm.execution.setNextRequest(null);",
+            "} else if (attempts < 20) {",
+            "  pm.collectionVariables.set('inventoryFailurePollCount', String(attempts + 1));",
+            "  pm.execution.setNextRequest('6. Wait for inventory rejection');",
+            "} else {",
+            "  pm.test('Inventory rejection reached Cancelled before timeout', function () { pm.expect(order.status).to.eql('Cancelled'); pm.expect(order.failureReason).to.include('Unknown SKU'); });",
+            "  pm.execution.setNextRequest(null);",
+            "}"
+          ]
+        }
+      }]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5080" },
+    { "key": "successOrderId", "value": "" },
+    { "key": "successPollCount", "value": "0" },
+    { "key": "paymentFailureOrderId", "value": "" },
+    { "key": "paymentFailurePollCount", "value": "0" },
+    { "key": "inventoryFailureOrderId", "value": "" },
+    { "key": "inventoryFailurePollCount", "value": "0" }
+  ]
+}

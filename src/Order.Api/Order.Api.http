@@ -1,0 +1,51 @@
+@baseUrl = http://localhost:5080
+
+### Create a successful order
+# @name createSuccessfulOrder
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{
+	"customerEmail": "buyer@example.com",
+	"totalAmount": 49.95
+}
+
+###
+
+# Run again until status is Confirmed.
+GET {{baseUrl}}/orders/{{createSuccessfulOrder.response.body.$.id}}
+Accept: application/json
+
+### Create an order with payment failure (compensates by releasing inventory)
+# @name createPaymentFailureOrder
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{
+	"customerEmail": "buyer@example.com",
+	"totalAmount": 49.95,
+	"simulatePaymentFailure": true
+}
+
+### Run again until status is Cancelled; it may briefly be CompensationPending.
+GET {{baseUrl}}/orders/{{createPaymentFailureOrder.response.body.$.id}}
+Accept: application/json
+
+### Create an order with inventory rejection
+# @name createInventoryRejectionOrder
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{
+	"customerEmail": "buyer@example.com",
+	"totalAmount": 49.95,
+	"simulateInventoryFailure": true
+}
+
+### Inventory rejection cancels without attempting payment.
+GET {{baseUrl}}/orders/{{createInventoryRejectionOrder.response.body.$.id}}
+Accept: application/json
+
+### API health
+GET {{baseUrl}}/health
+Accept: application/json
