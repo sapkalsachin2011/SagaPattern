@@ -11,8 +11,15 @@ public sealed class OrderStatusChangedConsumer(
 {
     public async Task Consume(ConsumeContext<OrderStatusChanged> context)
     {
+        logger.LogInformation(
+            "[FLOW] RECEIVE service=Notification.Worker consumer=OrderStatusChangedConsumer message=OrderStatusChanged orderId={OrderId} correlationId={CorrelationId} status={Status}",
+            context.Message.OrderId, context.Message.CorrelationId, context.Message.Status);
+
         if (context.Message.Status != "Confirmed")
         {
+            logger.LogInformation(
+                "[FLOW] SKIP service=Notification.Worker orderId={OrderId} reason=OnlyConfirmedOrdersAreRecorded status={Status}",
+                context.Message.OrderId, context.Message.Status);
             return;
         }
 
@@ -20,6 +27,9 @@ public sealed class OrderStatusChangedConsumer(
                 notification => notification.OrderId == context.Message.OrderId,
                 context.CancellationToken))
         {
+            logger.LogInformation(
+            "[FLOW] SKIP service=Notification.Worker orderId={OrderId} reason=NotificationAlreadyExists",
+            context.Message.OrderId);
             return;
         }
 
@@ -30,7 +40,8 @@ public sealed class OrderStatusChangedConsumer(
             Status = "Logged"
         });
         await dbContext.SaveChangesAsync(context.CancellationToken);
-        logger.LogInformation("Confirmation notification recorded for order {OrderId} ({Email})",
-            context.Message.OrderId, context.Message.CustomerEmail);
+        logger.LogInformation(
+            "[FLOW] DB COMMIT service=Notification.Worker database=notifications_db orderId={OrderId} notificationStatus=Logged",
+            context.Message.OrderId);
     }
 }

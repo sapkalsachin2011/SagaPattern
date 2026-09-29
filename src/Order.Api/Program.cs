@@ -43,8 +43,10 @@ app.MapPost("/orders", async (
     CreateOrderRequest request,
     OrderDbContext dbContext,
     IPublishEndpoint publishEndpoint,
+    ILoggerFactory loggerFactory,
     CancellationToken cancellationToken) =>
 {
+    var logger = loggerFactory.CreateLogger("MessageFlow.OrderApi");
     if (string.IsNullOrWhiteSpace(request.CustomerEmail) ||
         request.CustomerEmail.Length > 320 ||
         !request.CustomerEmail.Contains('@') ||
@@ -66,6 +68,9 @@ app.MapPost("/orders", async (
 
     await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
     dbContext.Orders.Add(order);
+    logger.LogInformation(
+        "[FLOW] RECEIVE service=Order.Api source=HTTP message=CreateOrder orderId={OrderId} correlationId={CorrelationId} amount={Amount}",
+        order.Id, order.Id, order.TotalAmount);
     await publishEndpoint.Publish(new OrderSubmitted(
         order.Id,
         order.Id,
@@ -73,8 +78,14 @@ app.MapPost("/orders", async (
         order.TotalAmount,
         request.SimulatePaymentFailure,
         request.SimulateInventoryFailure), cancellationToken);
+    logger.LogInformation(
+        "[FLOW] OUTBOX ADD service=Order.Api destination=RabbitMQ message=OrderSubmitted orderId={OrderId} correlationId={CorrelationId}",
+        order.Id, order.Id);
     await dbContext.SaveChangesAsync(cancellationToken);
     await transaction.CommitAsync(cancellationToken);
+    logger.LogInformation(
+        "[FLOW] DB COMMIT service=Order.Api database=orders_db message=OrderSubmitted orderId={OrderId} status={Status}",
+        order.Id, order.Status);
 
     return Results.Accepted($"/orders/{order.Id}", new { order.Id, order.Status });
 });
