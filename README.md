@@ -34,6 +34,33 @@ Client -> Order API -> RabbitMQ -> Saga Orchestrator
                          Order API + Notification
 ```
 
+### Order API Request Flow
+
+When the API accepts an order, it saves the pending order and an `OrderSubmitted` outbox message in one `orders_db` transaction. MassTransit publishes the outbox message to RabbitMQ after that transaction commits. The Saga and workers then process the message asynchronously.
+
+```mermaid
+flowchart LR
+  Client[Postman or client] -->|POST /orders| API[Order API]
+  API -->|one transaction: pending order + OrderSubmitted outbox record| OrdersDB[(orders_db)]
+  OrdersDB -->|outbox dispatcher publishes after commit| RabbitMQ[(RabbitMQ)]
+  RabbitMQ -->|OrderSubmitted| Saga[Saga Orchestrator]
+  Saga -->|save Saga state + ReserveInventory outbox record| SagaDB[(saga_db)]
+  SagaDB -->|outbox dispatcher publishes| RabbitMQ
+  RabbitMQ -->|ReserveInventory| Inventory[Inventory Worker]
+  Inventory -->|reserve stock + InventoryReserved outbox record| InventoryDB[(inventory_db)]
+  InventoryDB -->|outbox dispatcher publishes| RabbitMQ
+  RabbitMQ -->|InventoryReserved| Saga
+  Saga -->|ChargePayment| RabbitMQ
+  RabbitMQ --> Payment[Payment Worker]
+  Payment -->|payment result| RabbitMQ
+  RabbitMQ -->|PaymentCaptured or PaymentFailed| Saga
+  Saga -->|OrderStatusChanged| RabbitMQ
+  RabbitMQ -->|consume status event| API
+  API -->|update order status| OrdersDB
+```
+
+If payment fails, the Saga publishes `ReleaseInventory`; the Inventory Worker restores the reserved quantity, marks the reservation `Released`, and reports `InventoryReleased`. The Saga then publishes the final `Cancelled` order status. RabbitMQ transports these messages; each service writes only to its own database.
+
 Each service owns its own database. Locally, five separate PostgreSQL databases share one PostgreSQL container to keep setup lightweight. The services use separate connection strings and do not read or write one another's databases. A production deployment would normally provision each service's database independently.
 
 ## Prerequisites
@@ -73,6 +100,24 @@ dotnet run --no-launch-profile --project src/Inventory.Worker
 dotnet run --no-launch-profile --project src/Payment.Worker
 dotnet run --no-launch-profile --project src/Notification.Worker
 ```
+
+Alternatively, on macOS with the default Zsh shell, start all five services from one terminal in the solution directory:
+
+```zsh
+cd ~/Projects/Microservice-Projects/SagaPattern
+
+trap 'kill $(jobs -p) 2>/dev/null; wait' INT TERM
+
+dotnet run --no-launch-profile --project src/Order.Api --urls http://localhost:5080 &
+dotnet run --no-launch-profile --project src/Saga.Orchestrator &
+dotnet run --no-launch-profile --project src/Inventory.Worker &
+dotnet run --no-launch-profile --project src/Payment.Worker &
+dotnet run --no-launch-profile --project src/Notification.Worker &
+
+wait
+```
+
+Keep this terminal open while the services run. Press `Ctrl+C` to stop them. Start Docker infrastructure with `docker compose up -d --wait` before starting the services.
 
 The apps create their local tables on startup. This uses EF Core `EnsureCreated` for the demo; use reviewed EF migrations for production schema changes.
 
@@ -330,3 +375,6 @@ dotnet test SagaPattern.sln
 ```
 
 The Saga state-machine tests use MassTransit's in-memory test harness and do not require Docker.
+
+
+![alt text](CB4F7011-9A8E-448C-9407-7E65EE1AD677.png)
